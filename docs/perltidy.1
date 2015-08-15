@@ -124,7 +124,7 @@
 .\" ========================================================================
 .\"
 .IX Title "PERLTIDY 1"
-.TH PERLTIDY 1 "2014-07-11" "perl v5.14.2" "User Contributed Perl Documentation"
+.TH PERLTIDY 1 "2015-08-14" "perl v5.14.2" "User Contributed Perl Documentation"
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
@@ -638,6 +638,25 @@ With this option perltidy is still free to modify the indenting (and
 outdenting) of code and comments as it normally would.  If you also want to
 prevent long comment lines from being outdented, you can add either \fB\-noll\fR or
 \&\fB\-l=0\fR.
+.IP "\fB\-enc=s\fR,  \fB\-\-character\-encoding=s\fR" 4
+.IX Item "-enc=s,  --character-encoding=s"
+where \fBs\fR=\fBnone\fR or \fButf8\fR.  This flag tells perltidy the character encoding
+of both the input and output character streams.  The value \fButf8\fR causes the
+stream to be read and written as \s-1UTF\-8\s0.  The value \fBnone\fR causes the stream to
+be processed without special encoding assumptions.  At present there is no
+automatic detection of character encoding (even if there is a \f(CW\*(Aquse utf8\*(Aq\fR
+statement in your code) so this flag must be set for streams encoded in \s-1UTF\-8\s0.
+Incorrectly setting this parameter can cause data corruption, so please
+carefully check the output.
+.Sp
+The default is \fBnone\fR.
+.Sp
+The abbreviations \fB\-utf8\fR or \fB\-UTF8\fR are equivalent to \fB\-enc=utf8\fR.
+So to process a file named \fBfile.pl\fR which is encoded in \s-1UTF\-8\s0 you can use:
+.Sp
+.Vb 1
+\&   perltidy \-utf8 file.pl
+.Ve
 .IP "\fB\-ole=s\fR,  \fB\-\-output\-line\-ending=s\fR" 4
 .IX Item "-ole=s,  --output-line-ending=s"
 where s=\f(CW\*(C`win\*(C'\fR, \f(CW\*(C`dos\*(C'\fR, \f(CW\*(C`unix\*(C'\fR, or \f(CW\*(C`mac\*(C'\fR.  This flag tells perltidy
@@ -3188,7 +3207,7 @@ purpose of this rule is to prevent generating confusing filenames such as
 \&\fIperlstyle\fR\|(1), \fIPerl::Tidy\fR\|(3)
 .SH "VERSION"
 .IX Header "VERSION"
-This man page documents perltidy version 20140711.
+This man page documents perltidy version 20150815.
 .SH "CREDITS"
 .IX Header "CREDITS"
 Michael Cartmell supplied code for adaptation to \s-1VMS\s0 and helped with

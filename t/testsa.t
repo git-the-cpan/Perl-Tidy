@@ -36,7 +36,9 @@ my @expected_output=<DATA>;
 my $ok=1;
 if (@expected_output == @tidy_output) {
         while ( $_ = pop @tidy_output ) {
+ 	    s/\s+$//;
             my $expect = pop @expected_output;
+	    $expect=~s/\s+$//;
             if ( $expect ne $_ ) {
                 print STDERR "got:$_";
                 print STDERR "---\n";

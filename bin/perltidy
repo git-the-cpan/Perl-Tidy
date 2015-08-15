@@ -525,6 +525,24 @@ outdenting) of code and comments as it normally would.  If you also want to
 prevent long comment lines from being outdented, you can add either B<-noll> or
 B<-l=0>.
 
+=item B<-enc=s>,  B<--character-encoding=s>
+
+where B<s>=B<none> or B<utf8>.  This flag tells perltidy the character encoding
+of both the input and output character streams.  The value B<utf8> causes the
+stream to be read and written as UTF-8.  The value B<none> causes the stream to
+be processed without special encoding assumptions.  At present there is no
+automatic detection of character encoding (even if there is a C<'use utf8'>
+statement in your code) so this flag must be set for streams encoded in UTF-8.
+Incorrectly setting this parameter can cause data corruption, so please
+carefully check the output.
+
+The default is B<none>.  
+
+The abbreviations B<-utf8> or B<-UTF8> are equivalent to B<-enc=utf8>.
+So to process a file named B<file.pl> which is encoded in UTF-8 you can use:
+
+   perltidy -utf8 file.pl
+
 =item B<-ole=s>,  B<--output-line-ending=s>
 
 where s=C<win>, C<dos>, C<unix>, or C<mac>.  This flag tells perltidy
@@ -3098,7 +3116,7 @@ perlstyle(1), Perl::Tidy(3)
 
 =head1 VERSION
 
-This man page documents perltidy version 20140711.
+This man page documents perltidy version 20150815.
 
 =head1 CREDITS
 

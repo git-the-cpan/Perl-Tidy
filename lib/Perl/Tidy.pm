@@ -3,7 +3,7 @@
 #
 #    perltidy - a perl script indenter and formatter
 #
-#    Copyright (c) 2000-2014 by Steve Hancock
+#    Copyright (c) 2000-2015 by Steve Hancock
 #    Distributed under the GPL license agreement; see file COPYING
 #
 #    This program is free software; you can redistribute it and/or modify
@@ -67,6 +67,7 @@ use vars qw{
   @EXPORT
   $missing_file_spec
   $fh_stderr
+  $rOpts_character_encoding
 };
 
 @ISA    = qw( Exporter );
@@ -79,7 +80,7 @@ use File::Copy;
 use File::Temp qw(tempfile);
 
 BEGIN {
-    ( $VERSION = q($Id: Tidy.pm,v 1.74 2014/07/11 13:56:49 perltidy Exp $) ) =~ s/^.*\s+(\d+)\/(\d+)\/(\d+).*$/$1$2$3/; # all one line for MakeMaker
+    ( $VERSION = q($Id: Tidy.pm,v 1.74 2015/08/15 13:56:49 perltidy Exp $) ) =~ s/^.*\s+(\d+)\/(\d+)\/(\d+).*$/$1$2$3/; # all one line for MakeMaker
 }
 
 sub streamhandle {
@@ -121,7 +122,10 @@ sub streamhandle {
             # skipped and we can just let it crash if there is no
             # getline.
             if ( $mode =~ /[rR]/ ) {
-                if ( $ref eq 'IO::File' || defined &{ $ref . "::getline" } ) {
+
+                # RT#97159; part 1 of 2: updated to use 'can'
+                ##if ( $ref eq 'IO::File' || defined &{ $ref . "::getline" } ) {
+                if ( $ref->can('getline') ) {
                     $New = sub { $filename };
                 }
                 else {
@@ -138,7 +142,10 @@ EOM
             # Accept an object with a print method for writing.
             # See note above about IO::File
             if ( $mode =~ /[wW]/ ) {
-                if ( $ref eq 'IO::File' || defined &{ $ref . "::print" } ) {
+
+                # RT#97159; part 2 of 2: updated to use 'can'
+                ##if ( $ref eq 'IO::File' || defined &{ $ref . "::print" } ) {
+                if ( $ref->can('print') ) {
                     $New = sub { $filename };
                 }
                 else {
@@ -165,6 +172,13 @@ EOM
     }
     $fh = $New->( $filename, $mode )
       or Warn("Couldn't open file:$filename in mode:$mode : $!\n");
+
+    # The first call here will be to read the config file, which is before
+    # the --encoding has been set, so the config file cannot be read as utf8
+    $fh->binmode(':encoding(utf8)')
+      if ( $rOpts_character_encoding
+        && $rOpts_character_encoding eq 'utf8'
+        && $fh->can('binmode') );
     return $fh, ( $ref or $filename );
 }
 
@@ -544,6 +558,8 @@ EOM
         html => 'html',
         user => '',
     );
+
+    $rOpts_character_encoding = $rOpts->{'character-encoding'};
 
     # be sure we have a valid output format
     unless ( exists $default_file_extension{ $rOpts->{'format'} } ) {
@@ -1305,7 +1321,7 @@ sub get_stream_as_named_file {
             my ( $fh_stream, $fh_name ) =
               Perl::Tidy::streamhandle( $stream, 'r' );
             if ($fh_stream) {
-                my ( $fout, $tmpnam ) = tempfile();
+                my ( $fout, $tmpnam ) = File::Temp::tempfile();
                 if ($fout) {
                     $fname      = $tmpnam;
                     $is_tmpfile = 1;
@@ -1529,6 +1545,7 @@ sub generate_options {
     $add_option->( 'standard-error-output',      'se',    '!' );
     $add_option->( 'standard-output',            'st',    '!' );
     $add_option->( 'warning-output',             'w',     '!' );
+    $add_option->( 'character-encoding',         'enc',   '=s' );
 
     # options which are both toggle switches and values moved here
     # to hide from tidyview (which does not show category 0 flags):
@@ -1760,6 +1777,7 @@ sub generate_options {
     %option_range = (
         'format'             => [ 'tidy', 'html', 'user' ],
         'output-line-ending' => [ 'dos',  'win',  'mac', 'unix' ],
+        'character-encoding' => [ 'none', 'utf8' ],
 
         'block-brace-tightness'    => [ 0, 2 ],
         'brace-tightness'          => [ 0, 2 ],
@@ -1846,6 +1864,7 @@ sub generate_options {
       nostatic-side-comments
       notabs
       nowarning-output
+      character-encoding=none
       outdent-labels
       outdent-long-quotes
       outdent-long-comments
@@ -1911,6 +1930,9 @@ sub generate_options {
         'nhtml' => [qw(format=tidy)],
         'tidy'  => [qw(format=tidy)],
 
+        'utf8' => [qw(character-encoding=utf8)],
+        'UTF8' => [qw(character-encoding=utf8)],
+
         'swallow-optional-blank-lines'   => [qw(kbl=0)],
         'noswallow-optional-blank-lines' => [qw(kbl=1)],
         'sob'                            => [qw(kbl=0)],
@@ -1969,7 +1991,7 @@ sub generate_options {
         'sct'                    => [qw(scp schb scsb)],
         'stack-closing-tokens'   => => [qw(scp schb scsb)],
         'nsct'                   => [qw(nscp nschb nscsb)],
-        'nostack-opening-tokens' => [qw(nscp nschb nscsb)],
+        'nostack-closing-tokens' => [qw(nscp nschb nscsb)],
 
         'sac'                    => [qw(sot sct)],
         'nsac'                   => [qw(nsot nsct)],
@@ -3306,7 +3328,7 @@ sub show_version {
     print STDOUT <<"EOM";
 This is perltidy, v$VERSION 
 
-Copyright 2000-2014, Steve Hancock
+Copyright 2000-2015, Steve Hancock
 
 Perltidy is free software and may be copied under the terms of the GNU
 General Public License, which is included in the distribution files.
@@ -4357,6 +4379,7 @@ sub warning {
             Perl::Tidy::Warn "## Please see file $filename\n"
               unless ref($warning_file);
             $self->{_fh_warnings} = $fh_warnings;
+            $fh_warnings->print("Perltidy version is $Perl::Tidy::VERSION\n");
         }
 
         if ( $warning_count < WARNING_LIMIT ) {
@@ -5134,7 +5157,7 @@ sub pod_to_html {
     }
 
     # Pod::Html requires a real temporary filename
-    my ( $fh_tmp, $tmpfile ) = tempfile();
+    my ( $fh_tmp, $tmpfile ) = File::Temp::tempfile();
     unless ($fh_tmp) {
         Perl::Tidy::Warn
           "unable to open temporary file $tmpfile; cannot use pod2html\n";
@@ -7793,6 +7816,13 @@ EOM
         $rOpts->{'long-block-line-count'} = 1000000;
     }
 
+    my $enc = $rOpts->{'character-encoding'};
+    if ( $enc && $enc !~ /^(none|utf8)$/i ) {
+        Perl::Tidy::Die <<EOM;
+Unrecognized character-encoding '$enc'; expecting one of: (none, utf8)
+EOM
+    }
+
     my $ole = $rOpts->{'output-line-ending'};
     if ($ole) {
         my %endings = (
@@ -7801,16 +7831,38 @@ EOM
             mac  => "\015",
             unix => "\012",
         );
-        $ole = lc $ole;
-        unless ( $rOpts->{'output-line-ending'} = $endings{$ole} ) {
-            my $str = join " ", keys %endings;
-            Perl::Tidy::Die <<EOM;
+
+        # Patch for RT #99514, a memoization issue.
+        # Normally, the user enters one of 'dos', 'win', etc, and we change the
+        # value in the options parameter to be the corresponding line ending
+        # character.  But, if we are using memoization, on later passes through
+        # here the option parameter will already have the desired ending
+        # character rather than the keyword 'dos', 'win', etc.  So
+        # we must check to see if conversion has already been done and, if so,
+        # bypass the conversion step.
+        my %endings_inverted = (
+            "\015\012" => 'dos',
+            "\015\012" => 'win',
+            "\015"     => 'mac',
+            "\012"     => 'unix',
+        );
+
+        if ( defined( $endings_inverted{$ole} ) ) {
+
+            # we already have valid line ending, nothing more to do
+        }
+        else {
+            $ole = lc $ole;
+            unless ( $rOpts->{'output-line-ending'} = $endings{$ole} ) {
+                my $str = join " ", keys %endings;
+                Perl::Tidy::Die <<EOM;
 Unrecognized line ending '$ole'; expecting one of: $str
 EOM
-        }
-        if ( $rOpts->{'preserve-line-endings'} ) {
-            Perl::Tidy::Warn "Ignoring -ple; conflicts with -ole\n";
-            $rOpts->{'preserve-line-endings'} = undef;
+            }
+            if ( $rOpts->{'preserve-line-endings'} ) {
+                Perl::Tidy::Warn "Ignoring -ple; conflicts with -ole\n";
+                $rOpts->{'preserve-line-endings'} = undef;
+            }
         }
     }
 
@@ -9502,10 +9554,19 @@ sub set_white_space_flag {
         }
 
         # This is a good place to kill incomplete one-line blocks
-        if (   ( $semicolons_before_block_self_destruct == 0 )
-            && ( $max_index_to_go >= 0 )
-            && ( $types_to_go[$max_index_to_go] eq ';' )
-            && ( $$rtokens[0] ne '}' ) )
+        if (
+            (
+                   ( $semicolons_before_block_self_destruct == 0 )
+                && ( $max_index_to_go >= 0 )
+                && ( $types_to_go[$max_index_to_go] eq ';' )
+                && ( $$rtokens[0] ne '}' )
+            )
+
+            # Patch for RT #98902. Honor request to break at old commas.
+            || (   $rOpts_break_at_old_comma_breakpoints
+                && $max_index_to_go >= 0
+                && $types_to_go[$max_index_to_go] eq ',' )
+          )
         {
             destroy_one_line_block();
             output_line_to_go();
@@ -10644,7 +10705,7 @@ sub unstore_token_to_go {
 
 sub want_blank_line {
     flush();
-    $file_writer_object->want_blank_line();
+    $file_writer_object->want_blank_line() unless $in_format_skipping_section;
 }
 
 sub write_unindented_line {
@@ -25352,11 +25413,20 @@ EOM
                 # '//' must be defined_or operator if an operator is expected.
                 # TODO: Code for other ambiguous digraphs (/=, x=, **, *=)
                 # could be migrated here for clarity
-                if ( $test_tok eq '//' ) {
+
+              # Patch for RT#102371, misparsing a // in the following snippet:
+              #     state $b //= ccc();
+              # The solution is to always accept the digraph (or trigraph) after
+              # token type 'Z' (possible file handle).  The reason is that
+              # sub operator_expected gives TERM expected here, which is
+              # wrong in this case.
+                if ( $test_tok eq '//' && $last_nonblank_type ne 'Z' ) {
                     my $next_type = $$rtokens[ $i + 1 ];
                     my $expecting =
                       operator_expected( $prev_type, $tok, $next_type );
-                    $combine_ok = 0 unless ( $expecting == OPERATOR );
+
+                    # Patched for RT#101547, was 'unless ($expecting==OPERATOR)'
+                    $combine_ok = 0 if ( $expecting == TERM );
                 }
             }
 
@@ -25711,9 +25781,17 @@ EOM
                     elsif ( $tok eq 'else' ) {
 
                         # patched for SWITCH/CASE
-                        if (   $last_nonblank_token ne ';'
+                        if (
+                               $last_nonblank_token ne ';'
                             && $last_nonblank_block_type !~
-                            /^(if|elsif|unless|case|when)$/ )
+                            /^(if|elsif|unless|case|when)$/
+
+                            # patch to avoid an unwanted error message for
+                            # the case of a parenless 'case' (RT 105484):
+                            # switch ( 1 ) { case x { 2 } else { } }
+                            && $statement_type !~
+                            /^(if|elsif|unless|case|when)$/
+                          )
                         {
                             warning(
 "expecting '$tok' to follow one of 'if|elsif|unless|case|when'\n"
@@ -26452,8 +26530,15 @@ EOM
                             $in_statement_continuation = 0;
                         }
 
-                       # otherwise, the next token after a ',' starts a new term
-                        elsif ( $type eq ',' ) {
+                        # otherwise, the token after a ',' starts a new term
+
+                        # Patch FOR RT#99961; no continuation after a ';'
+			# This is needed because perltidy currently marks
+                        # a block preceded by a type character like % or @
+                        # as a non block, to simplify formatting. But these
+                        # are actually blocks and can have semicolons.
+                        # See code_block_type() and is_non_structural_brace().
+                        elsif ( $type eq ',' || $type eq ';' ) {
                             $in_statement_continuation = 0;
                         }
 
@@ -26871,9 +26956,11 @@ sub code_block_type {
         }
     }
 
+    ################################################################
     # NOTE: braces after type characters start code blocks, but for
     # simplicity these are not identified as such.  See also
     # sub is_non_structural_brace.
+    ################################################################
 
 ##    elsif ( $last_nonblank_type eq 't' ) {
 ##       return $last_nonblank_token;
@@ -27127,9 +27214,11 @@ sub is_non_structural_brace {
     #    return 0;
     # }
 
+    ################################################################
     # NOTE: braces after type characters start code blocks, but for
     # simplicity these are not identified as such.  See also
     # sub code_block_type
+    ################################################################
 
     ##if ($last_nonblank_type eq 't') {return 0}
 

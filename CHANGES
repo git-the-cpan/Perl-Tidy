@@ -1,4 +1,39 @@
 Perltidy Change Log
+  2015 08 15
+      - Fixed RT# 105484, Invalid warning about 'else' in 'switch' statement.  The
+        warning happened if a 'case' statement did not use parens.
+
+      - Fixed RT# 101547, misparse of // caused error message.  Also..
+
+      - Fixed RT# 102371, misparse of // caused unwated space in //=
+
+      - Fixed RT# 100871, "silent failure of HTML Output on Windows". 
+        Changed calls to tempfile() from:
+          my ( $fh_tmp, $tmpfile ) = tempfile();
+        to have the full path name:
+          my ( $fh_tmp, $tmpfile ) = File::Temp::tempfile()
+        because of problems in the Windows version reported by Dean Pearce.
+
+      - Fixed RT# 99514, calling the perltidy module multiple times with 
+        a .perltidyrc file containing the parameter --output-line-ending 
+        caused a crash.  This was a glitch in the memoization logic. 
+
+      - Fixed RT#99961, multiple lines inside a cast block caused unwanted
+        continuation indentation.  
+
+      - RT# 32905, broken handling of UTF-8 strings. 
+        A new flag -utf8 causes perltidy assume UTF-8 encoding for input and 
+        output of an io stream.  Thanks to Sebastian Podjasek for a patch.  
+        This feature may not work correctly in older versions of Perl. 
+        It worked in a linux version 5.10.1 but not in a Windows version 5.8.3 (but
+        otherwise perltidy ran correctly).
+
+      - Warning files now report perltidy VERSION. Suggested by John Karr.
+ 
+      - Fixed long flag --nostack-closing-tokens (-nsct has always worked though). 
+        This was due to a typo.  This also fixed --nostack-opening-tokens to 
+        behave correctly.  Thanks to Rob Dixon.
+
   2014 07 11
       - Fixed RT #94902: abbreviation parsing in .perltidyrc files was not
         working for multi-line abbreviations.  Thanks to Eric Fung for 

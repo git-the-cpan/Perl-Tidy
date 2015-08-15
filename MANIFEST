@@ -35,4 +35,6 @@ pm2pl
 t/test.t
 t/testsa.t
 t/testss.t
+t/testwide.t
+t/testwide.pl.src
 META.yml                                 Module meta-data (added by MakeMaker)

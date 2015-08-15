@@ -415,7 +415,7 @@ to perltidy.
 
 =head1 VERSION
 
-This man page documents Perl::Tidy version 20140711.
+This man page documents Perl::Tidy version 20150815.
 
 =head1 LICENSE
 
