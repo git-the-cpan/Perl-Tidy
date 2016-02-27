@@ -3,7 +3,7 @@
 #
 #    perltidy - a perl script indenter and formatter
 #
-#    Copyright (c) 2000-2015 by Steve Hancock
+#    Copyright (c) 2000-2016 by Steve Hancock
 #    Distributed under the GPL license agreement; see file COPYING
 #
 #    This program is free software; you can redistribute it and/or modify
@@ -53,9 +53,11 @@
 ############################################################
 
 package Perl::Tidy;
-use 5.004;    # need IO::File from 5.004 or later
-BEGIN { $^W = 1; }    # turn on warnings
 
+# Actually should use a version later than about 5.8.5 to use
+# wide characters.
+use 5.004;    # need IO::File from 5.004 or later
+use warnings;
 use strict;
 use Exporter;
 use Carp;
@@ -74,13 +76,14 @@ use vars qw{
 @EXPORT = qw( &perltidy );
 
 use Cwd;
+use Encode ();
 use IO::File;
 use File::Basename;
 use File::Copy;
 use File::Temp qw(tempfile);
 
 BEGIN {
-    ( $VERSION = q($Id: Tidy.pm,v 1.74 2015/08/15 13:56:49 perltidy Exp $) ) =~ s/^.*\s+(\d+)\/(\d+)\/(\d+).*$/$1$2$3/; # all one line for MakeMaker
+    ( $VERSION = q($Id: Tidy.pm,v 1.74 2016/03/01 13:56:49 perltidy Exp $) ) =~ s/^.*\s+(\d+)\/(\d+)\/(\d+).*$/$1$2$3/; # all one line for MakeMaker
 }
 
 sub streamhandle {
@@ -173,12 +176,6 @@ EOM
     $fh = $New->( $filename, $mode )
       or Warn("Couldn't open file:$filename in mode:$mode : $!\n");
 
-    # The first call here will be to read the config file, which is before
-    # the --encoding has been set, so the config file cannot be read as utf8
-    $fh->binmode(':encoding(utf8)')
-      if ( $rOpts_character_encoding
-        && $rOpts_character_encoding eq 'utf8'
-        && $fh->can('binmode') );
     return $fh, ( $ref or $filename );
 }
 
@@ -811,12 +808,33 @@ EOM
         # Prefilters and postfilters: The prefilter is a code reference
         # that will be applied to the source before tidying, and the
         # postfilter is a code reference to the result before outputting.
-        if ($prefilter) {
+        if (
+            $prefilter
+            || (   $rOpts_character_encoding
+                && $rOpts_character_encoding eq 'utf8' )
+          )
+        {
             my $buf = '';
             while ( my $line = $source_object->get_line() ) {
                 $buf .= $line;
             }
-            $buf = $prefilter->($buf);
+
+            $buf = $prefilter->($buf) if $prefilter;
+
+            if (   $rOpts_character_encoding
+                && $rOpts_character_encoding eq 'utf8'
+                && !utf8::is_utf8($buf) )
+            {
+                eval {
+                    $buf = Encode::decode( 'UTF-8', $buf,
+                        Encode::FB_CROAK | Encode::LEAVE_SRC );
+                };
+                if ($@) {
+                    Warn
+                      "skipping file: $input_file: Unable to decode source as UTF-8\n";
+                    next;
+                }
+            }
 
             $source_object = Perl::Tidy::LineSource->new( \$buf, $rOpts,
                 $rpending_logfile_message );
@@ -915,9 +933,9 @@ EOM
         # Eventually all I/O may be done with binmode, but for now it is
         # only done when a user requests a particular line separator
         # through the -ple or -ole flags
-        my $binmode = 0;
-        if   ( defined($line_separator) ) { $binmode        = 1 }
-        else                              { $line_separator = "\n" }
+        my $binmode = defined($line_separator)
+          || defined($rOpts_character_encoding);
+        $line_separator = "\n" unless defined($line_separator);
 
         my ( $sink_object, $postfilter_buffer );
         if ($postfilter) {
@@ -1063,6 +1081,7 @@ EOM
                 look_for_autoloader => $rOpts->{'look-for-autoloader'},
                 look_for_selfloader => $rOpts->{'look-for-selfloader'},
                 trim_qw             => $rOpts->{'trim-qw'},
+                extended_syntax     => $rOpts->{'extended-syntax'},
 
                 continuation_indentation =>
                   $rOpts->{'continuation-indentation'},
@@ -1567,6 +1586,7 @@ sub generate_options {
     $add_option->( 'preserve-line-endings',        'ple',  '!' );
     $add_option->( 'tabs',                         't',    '!' );
     $add_option->( 'default-tabsize',              'dt',   '=i' );
+    $add_option->( 'extended-syntax',              'xs',   '!' );
 
     ########################################
     $category = 2;    # Code indentation control
@@ -1840,6 +1860,7 @@ sub generate_options {
       continuation-indentation=2
       delete-old-newlines
       delete-semicolons
+      extended-syntax
       fuzzy-line-length
       hanging-side-comments
       indent-block-comments
@@ -3328,7 +3349,7 @@ sub show_version {
     print STDOUT <<"EOM";
 This is perltidy, v$VERSION 
 
-Copyright 2000-2015, Steve Hancock
+Copyright 2000-2016, Steve Hancock
 
 Perltidy is free software and may be copied under the terms of the GNU
 General Public License, which is included in the distribution files.
@@ -3935,7 +3956,12 @@ sub new {
         $output_file_open = 1;
         if ($binmode) {
             if ( ref($fh) eq 'IO::File' ) {
-                binmode $fh;
+                if (   $rOpts->{'character-encoding'}
+                    && $rOpts->{'character-encoding'} eq 'utf8' )
+                {
+                    binmode $fh, ":encoding(UTF-8)";
+                }
+                else { binmode $fh }
             }
             if ( $output_file eq '-' ) { binmode STDOUT }
         }
@@ -9500,10 +9526,20 @@ sub set_white_space_flag {
         # qw lines will still go out at the end of this routine.
         if ( $rOpts->{'indent-only'} ) {
             flush();
-            trim($input_line);
+            my $line = $input_line;
+
+            # delete side comments if requested with -io, but
+            # we will not allow deleting of closing side comments with -io
+            # because the coding would be more complex
+            if (   $rOpts->{'delete-side-comments'}
+                && $rtoken_type->[$jmax] eq '#' )
+            {
+                $line = join "", @{$rtokens}[ 0 .. $jmax - 1 ];
+            }
+            trim($line);
 
             extract_token(0);
-            $token                 = $input_line;
+            $token                 = $line;
             $type                  = 'q';
             $block_type            = "";
             $container_type        = "";
@@ -9568,6 +9604,8 @@ sub set_white_space_flag {
                 && $types_to_go[$max_index_to_go] eq ',' )
           )
         {
+            $forced_breakpoint_to_go[$max_index_to_go] = 1
+              if ($rOpts_break_at_old_comma_breakpoints);
             destroy_one_line_block();
             output_line_to_go();
         }
@@ -9968,7 +10006,13 @@ sub set_white_space_flag {
                     # But make a line break if the curly ends a
                     # significant block:
                     if (
-                        $is_block_without_semicolon{$block_type}
+                        (
+                            $is_block_without_semicolon{$block_type}
+
+                            # Follow users break point for
+                            # one line block types U & G, such as a 'try' block
+                            || $is_one_line_block =~ /^[UG]$/ && $j == $jmax
+                        )
 
                         # if needless semicolon follows we handle it later
                         && $next_nonblank_token ne ';'
@@ -10556,7 +10600,15 @@ sub starting_one_line_block {
             $i_start++;
         }
 
-        unless ( $tokens_to_go[$i_start] eq $block_type ) {
+        # Patch to avoid breaking short blocks defined with extended_syntax:
+        # Strip off any trailing () which was added in the parser to mark
+        # the opening keyword.  For example, in the following
+        #    create( TypeFoo $e) {$bubba}
+        # the blocktype would be marked as create()
+        my $stripped_block_type = $block_type;
+        $stripped_block_type =~ s/\(\)$//;
+
+        unless ( $tokens_to_go[$i_start] eq $stripped_block_type ) {
             return 0;
         }
     }
@@ -22840,6 +22892,7 @@ sub new {
         look_for_autoloader  => 1,
         look_for_selfloader  => 1,
         starting_line_number => 1,
+        extended_syntax      => 0,
     );
     my %args = ( %defaults, @_ );
 
@@ -22914,6 +22967,7 @@ sub new {
         _nearly_matched_here_target_at      => undef,
         _line_text                          => "",
         _rlower_case_labels_at              => undef,
+        _extended_syntax                    => $args{extended_syntax},
     };
 
     prepare_for_a_new_file();
@@ -24047,7 +24101,7 @@ sub prepare_for_a_new_file {
     sub scan_identifier {
         ( $i, $tok, $type, $id_scan_state, $identifier ) =
           scan_identifier_do( $i, $id_scan_state, $identifier, $rtokens,
-            $max_token_index, $expecting );
+            $max_token_index, $expecting, $paren_type[$paren_depth] );
     }
 
     sub scan_id {
@@ -24107,7 +24161,8 @@ sub prepare_for_a_new_file {
     # keyword ( .... ) { BLOCK }
     # patch for SWITCH/CASE: added 'switch' 'case' 'given' 'when'
     my %is_blocktype_with_paren;
-    @_ = qw(if elsif unless while until for foreach switch case given when);
+    @_ =
+      qw(if elsif unless while until for foreach switch case given when catch);
     @is_blocktype_with_paren{@_} = (1) x scalar(@_);
 
     # ------------------------------------------------------------
@@ -24189,6 +24244,9 @@ sub prepare_for_a_new_file {
             if ($want_paren) {
                 $container_type = $want_paren;
                 $want_paren     = "";
+            }
+            elsif ( $statement_type =~ /^sub/ ) {
+                $container_type = $statement_type;
             }
             else {
                 $container_type = $last_nonblank_token;
@@ -24393,7 +24451,7 @@ sub prepare_for_a_new_file {
             if ($is_pattern) {
                 $in_quote                = 1;
                 $type                    = 'Q';
-                $allowed_quote_modifiers = '[msixpodualgc]';
+                $allowed_quote_modifiers = '[msixpodualngc]';
             }
             else {    # not a pattern; check for a /= token
 
@@ -24448,9 +24506,21 @@ sub prepare_for_a_new_file {
 
                 # check for syntax error here;
                 unless ( $is_blocktype_with_paren{$last_nonblank_token} ) {
-                    my $list = join( ' ', sort keys %is_blocktype_with_paren );
-                    warning(
-                        "syntax error at ') {', didn't see one of: $list\n");
+                    if ( $tokenizer_self->{'_extended_syntax'} ) {
+
+                        # we append a trailing () to mark this as an unknown
+                        # block type.  This allows perltidy to format some
+                        # common extensions of perl syntax.
+                        # This is used by sub code_block_type
+                        $last_nonblank_token .= '()';
+                    }
+                    else {
+                        my $list =
+                          join( ' ', sort keys %is_blocktype_with_paren );
+                        warning(
+"syntax error at ') {', didn't see one of: <<$list>>; If this code is okay try using the -xs flag\n"
+                        );
+                    }
                 }
             }
 
@@ -24608,7 +24678,7 @@ sub prepare_for_a_new_file {
             if ($is_pattern) {
                 $in_quote                = 1;
                 $type                    = 'Q';
-                $allowed_quote_modifiers = '[msixpodualgc]';
+                $allowed_quote_modifiers = '[msixpodualngc]';
             }
             else {
                 ( $type_sequence, $indent_flag ) =
@@ -24972,21 +25042,22 @@ sub prepare_for_a_new_file {
         '__DATA__' => '_in_data',
     );
 
-    # ref: camel 3 p 147,
+    # original ref: camel 3 p 147,
     # but perl may accept undocumented flags
     # perl 5.10 adds 'p' (preserve)
-    # Perl version 5.16, http://perldoc.perl.org/perlop.html,  has these:
-    # /PATTERN/msixpodualgc or m?PATTERN?msixpodualgc
-    # s/PATTERN/REPLACEMENT/msixpodualgcer
+    # Perl version 5.22 added 'n'
+    # From http://perldoc.perl.org/perlop.html we have
+    # /PATTERN/msixpodualngc or m?PATTERN?msixpodualngc
+    # s/PATTERN/REPLACEMENT/msixpodualngcer
     # y/SEARCHLIST/REPLACEMENTLIST/cdsr
     # tr/SEARCHLIST/REPLACEMENTLIST/cdsr
-    # qr/STRING/msixpodual
+    # qr/STRING/msixpodualn
     my %quote_modifiers = (
-        's'  => '[msixpodualgcer]',
+        's'  => '[msixpodualngcer]',
         'y'  => '[cdsr]',
         'tr' => '[cdsr]',
-        'm'  => '[msixpodualgc]',
-        'qr' => '[msixpodual]',
+        'm'  => '[msixpodualngc]',
+        'qr' => '[msixpodualn]',
         'q'  => "",
         'qq' => "",
         'qw' => "",
@@ -26533,7 +26604,7 @@ EOM
                         # otherwise, the token after a ',' starts a new term
 
                         # Patch FOR RT#99961; no continuation after a ';'
-			# This is needed because perltidy currently marks
+                        # This is needed because perltidy currently marks
                         # a block preceded by a type character like % or @
                         # as a non block, to simplify formatting. But these
                         # are actually blocks and can have semicolons.
@@ -27032,6 +27103,12 @@ sub code_block_type {
         else {
             return "";
         }
+    }
+
+    # handle unknown syntax ') {'
+    # we previously appended a '()' to mark this case
+    elsif ( $last_nonblank_token =~ /\(\)$/ ) {
+        return $last_nonblank_token;
     }
 
     # anything else must be anonymous hash reference
@@ -28146,7 +28223,7 @@ sub scan_identifier_do {
     # $last_nonblank_type
 
     my ( $i, $id_scan_state, $identifier, $rtokens, $max_token_index,
-        $expecting )
+        $expecting, $container_type )
       = @_;
     my $i_begin   = $i;
     my $type      = '';
@@ -28156,6 +28233,8 @@ sub scan_identifier_do {
     my $identifier_begin    = $identifier;
     my $tok                 = $tok_begin;
     my $message             = "";
+
+    my $in_prototype_or_signature = $container_type =~ /^sub/;
 
     # these flags will be used to help figure out the type:
     my $saw_alpha = ( $tok =~ /^[A-Za-z_]/ );
@@ -28363,6 +28442,13 @@ sub scan_identifier_do {
                 }
             }
             else {    # something else
+
+                if ( $in_prototype_or_signature && $tok =~ /^[\),=]/ ) {
+                    $id_scan_state = '';
+                    $i             = $i_save;
+                    $type          = 'i';       # probably punctuation variable
+                    last;
+                }
 
                 # check for various punctuation variables
                 if ( $identifier =~ /^[\$\*\@\%]$/ ) {
@@ -28679,20 +28765,16 @@ sub scan_identifier_do {
         my $pos_beg = $$rtoken_map[$i_beg];
         pos($input_line) = $pos_beg;
 
-        # sub NAME PROTO ATTRS
+        # Look for the sub NAME
         if (
             $input_line =~ m/\G\s*
         ((?:\w*(?:'|::))*)  # package - something that ends in :: or '
         (\w+)               # NAME    - required
-        (\s*\([^){]*\))?    # PROTO   - something in parens
-        (\s*:)?             # ATTRS   - leading : of attribute list
         /gcx
           )
         {
             $match   = 1;
             $subname = $2;
-            $proto   = $3;
-            $attrs   = $4;
 
             $package = ( defined($1) && $1 ) ? $1 : $current_package;
             $package =~ s/\'/::/g;
@@ -28704,19 +28786,34 @@ sub scan_identifier_do {
             $type = 'i';
         }
 
-        # Look for prototype/attributes not preceded on this line by subname;
-        # This might be an anonymous sub with attributes,
+        # Now look for PROTO ATTRS
+        # Look for prototype/attributes which are usually on the same
+        # line as the sub name but which might be on a separate line.
+        # For example, we might have an anonymous sub with attributes,
         # or a prototype on a separate line from its sub name
-        elsif (
-            $input_line =~ m/\G(\s*\([^){]*\))?  # PROTO
+
+        # NOTE: We only want to parse PROTOTYPES here. If we see anything that
+        # does not look like a prototype, we assume it is a SIGNATURE and we
+        # will stop and let the the standard tokenizer handle it.  In
+        # particular, we stop if we see any nested parens, braces, or commas.
+        my $saw_opening_paren = $input_line =~ /\G\s*\(/;
+        if (
+            $input_line =~ m/\G(\s*\([^\)\(\}\{\,]*\))?  # PROTO
             (\s*:)?                              # ATTRS leading ':'
             /gcx
             && ( $1 || $2 )
           )
         {
-            $match = 1;
             $proto = $1;
             $attrs = $2;
+
+            # If we also found the sub name on this call then append PROTO.
+            # This is not necessary but for compatability with previous
+            # versions when the -csc flag is used:
+            if ( $match && $proto ) {
+                $tok .= $proto;
+            }
+            $match ||= 1;
 
             # Handle prototype on separate line from subname
             if ($subname_saved) {
@@ -28744,8 +28841,8 @@ sub scan_identifier_do {
                 $in_attribute_list = 1;
             }
 
-            # We must convert back from character position
-            # to pre_token index.
+            # Otherwise, if we found a match we must convert back from
+            # string position to the pre_token index for continued parsing.
             else {
 
                 # I don't think an error flag can occur here ..but ?
@@ -28773,6 +28870,8 @@ sub scan_identifier_do {
             }
             $package_saved = "";
             $subname_saved = "";
+
+            # See what's next...
             if ( $next_nonblank_token eq '{' ) {
                 if ($subname) {
 
@@ -28804,19 +28903,21 @@ sub scan_identifier_do {
                 $statement_type = $tok;
             }
 
-            # see if PROTO follows on another line:
+            # if we stopped before an open paren ...
             elsif ( $next_nonblank_token eq '(' ) {
-                if ( $attrs || $proto ) {
-                    warning(
-"unexpected '(' after definition or declaration of sub '$subname'\n"
-                    );
+
+                # If we DID NOT see this paren above then it must be on the
+                # next line so we will set a flag to come back here and see if
+                # it is a PROTOTYPE
+
+                # Otherwise, we assume it is a SIGNATURE rather than a
+                # PROTOTYPE and let the normal tokenizer handle it as a list
+                if ( !$saw_opening_paren ) {
+                    $id_scan_state = 'sub';     # we must come back to get proto
+                    $package_saved = $package;
+                    $subname_saved = $subname;
                 }
-                else {
-                    $id_scan_state  = 'sub';    # we must come back to get proto
-                    $statement_type = $tok;
-                    $package_saved  = $package;
-                    $subname_saved  = $subname;
-                }
+                $statement_type = $tok;
             }
             elsif ($next_nonblank_token) {      # EOF technically ok
                 warning(
@@ -29804,11 +29905,11 @@ BEGIN {
 
     my @digraphs = qw(
       .. :: << >> ** && .. || // -> => += -= .= %= &= |= ^= *= <>
-      <= >= == =~ !~ != ++ -- /= x= ~~
+      <= >= == =~ !~ != ++ -- /= x= ~~ ~. |. &. ^.
     );
     @is_digraph{@digraphs} = (1) x scalar(@digraphs);
 
-    my @trigraphs = qw( ... **= <<= >>= &&= ||= //= <=> !~~ );
+    my @trigraphs = qw( ... **= <<= >>= &&= ||= //= <=> !~~ &.= |.= ^.=);
     @is_trigraph{@trigraphs} = (1) x scalar(@trigraphs);
 
     # make a hash of all valid token types for self-checking the tokenizer
@@ -29839,11 +29940,12 @@ BEGIN {
     @is_indirect_object_taker{@_} = (1) x scalar(@_);
 
     # These tokens may precede a code block
-    # patched for SWITCH/CASE
+    # patched for SWITCH/CASE/CATCH.  Actually these could be removed
+    # now and we could let the extended-syntax coding handle them
     @_ =
       qw( BEGIN END CHECK INIT AUTOLOAD DESTROY UNITCHECK continue if elsif else
       unless do while until eval for foreach map grep sort
-      switch case given when);
+      switch case given when catch);
     @is_code_block_token{@_} = (1) x scalar(@_);
 
     # I'll build the list of keywords incrementally
@@ -30145,6 +30247,7 @@ BEGIN {
       **= += -= .= /= *= %= x= &= |= ^= <<= >>= &&= ||= //=
       <= >= == != => \ > < % * / ? & | ** <=> ~~ !~~
       f F pp mm Y p m U J G j >> << ^ t
+      ~. ^. |. &. ^.= |.= &.=
       #;
     push( @value_requestor_type, ',' )
       ;    # (perl doesn't like a ',' in a qw block)
